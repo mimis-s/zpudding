@@ -1,0 +1,10 @@
+#yaml文件的作用:
+# 1:描述各个服务有哪些功能(例如job消息队列有些服务就是没有的)
+
+outpath: "/home/zhangbin/work/pro/src/go_pro/cmd_test" # 生成项目的路径
+name: "cmd_test" # 项目名(用于生成go mod, 例如:github.com/mimis-s/test)
+services:
+  - tag: "account"
+    templateIds: ["dao", "job", "service", "server", "view"]
+  - tag: "bag"
+    templateIds: ["dao", "job", "service"]
