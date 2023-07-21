@@ -27,8 +27,8 @@ zpudding以本人+我的小猫命名 主打一个宠爱,
 路径: https://github.com/mimis-s/zpudding/tools/auto_tool
 自动化生成项目代码,目录工具, 用户可自定义生成项目路径及名称和想要生成的哪些服务
 可在yaml文件中自定义内容: https://github.com/mimis-s/zpudding/tools/auto_tool/global/boot.yaml
-outpath: "/home/zhangbin/work/pro/src/go_pro/cmd_test" # 生成项目的路径
-name: "cmd_test" # 项目名(用于生成go mod, 例如:github.com/mimis-s/test)
+outpath: "/home/zhangbin/work/pro/src/go_pro/cmd_test" // 生成项目的路径
+name: "cmd_test" // 项目名(用于生成go mod, 例如:github.com/mimis-s/test)
 services:
   - tag: "account"
     // 下面这些项目现在是固定生成的, 不受配置影响, 后面有需求会考虑能自由添加项目
