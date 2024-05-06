@@ -2,9 +2,9 @@ package cache
 
 import (
 	"fmt"
+	"sync"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/go-redis/redis/v8"
 	_ "github.com/go-sql-driver/mysql"
@@ -32,6 +32,8 @@ func initHandler() *HandleCacheInfo {
 	}
 
 	getFunc := func(id int64, keys []interface{}) (interface{}, error) {
+		t := keys[0].(int)
+		fmt.Printf("tt:%v\n", t)
 		dbData := &BagItem{}
 		find, err := engine.Table("bag_item").Where(
 			"id = ?", id).Get(dbData)
@@ -46,6 +48,8 @@ func initHandler() *HandleCacheInfo {
 
 	updateFunc := func(id int64, keys []interface{}, data interface{}) error {
 		// dbData := data.(*BagItem)
+		t := keys[0].(int)
+		fmt.Printf("tt:%v\n", t)
 		_, err = engine.Table("bag_item").
 			Where("id = ?", id).Update(data)
 		if err != nil {
@@ -75,15 +79,17 @@ var timesDel int32 = 0
 func TestIntCache(t *testing.T) {
 	handlerData := initHandler()
 
+	wg := sync.WaitGroup{}
+	wg.Add(20)
 	i := 0
 	for {
 		go func() {
-			for j := 0; j < 100; j++ {
+			for j := 0; j < 1000; j++ {
 				strData, err := handlerData.Update(int64(itemID), func(data interface{}) (interface{}, error) {
 					itemNum := data.(*BagItem)
 					itemNum.ItemNum += 10
 					return itemNum, nil
-				})
+				}, 29)
 				if err != nil {
 					panic(err)
 				}
@@ -92,6 +98,7 @@ func TestIntCache(t *testing.T) {
 				itemNum := strData.(*BagItem)
 				fmt.Printf("增加:%v %v\n", timesAdd, itemNum.ItemNum)
 			}
+			wg.Done()
 		}()
 		i++
 		if i == 10 {
@@ -102,12 +109,12 @@ func TestIntCache(t *testing.T) {
 	i = 0
 	for {
 		go func() {
-			for j := 0; j < 100; j++ {
+			for j := 0; j < 1000; j++ {
 				strData, err := handlerData.Update(int64(itemID), func(data interface{}) (interface{}, error) {
 					itemNum := data.(*BagItem)
 					itemNum.ItemNum -= 10
 					return itemNum, nil
-				})
+				}, 29)
 				if err != nil {
 					panic(err)
 				}
@@ -116,15 +123,17 @@ func TestIntCache(t *testing.T) {
 				itemNum := strData.(*BagItem)
 				fmt.Printf("减少:%v %v\n", timesDel, itemNum.ItemNum)
 			}
+			wg.Done()
 		}()
 		i++
 		if i == 10 {
 			break
 		}
 	}
-	time.Sleep(time.Second * 3)
 
-	err := handlerData.LogoutCache(int64(itemID))
+	wg.Wait()
+
+	err := handlerData.LogoutCache(int64(itemID), 29)
 	if err != nil {
 		panic(err)
 	}
