@@ -27,6 +27,13 @@ zpudding以本人+我的小猫命名 主打一个宠爱,
 
 9.  cmd/flatbuffers是在flatbuffers源码的基础上进行修改, 改变之后的使用接近protoc-gen-rpcx的效果(flatbuffer+grpc)
 
+10.  pkg/flatc/codec是flatbuffer对应的序列化/反序列化工具
+
+10.  pkg/flatc/local_grpc_stream是flatbuffer流stream的本地调用库(all_in_one环境)
+
+11.  pkg/flatc/pools是grpc的一个客户端池子, 主要连接grpc服务器(这里的服务发现是直接连接service的域名, 通过域名解析达到和注册中心一样的效果), 所以flat+grpc这一套不需要考虑服务ip的租期续约等操作
+
+
 # 自动化生成工具
 路径: https://github.com/mimis-s/zpudding/tools/auto_tool
 ```
