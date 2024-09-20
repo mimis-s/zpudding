@@ -24,6 +24,9 @@ zpudding以本人+我的小猫命名 主打一个宠爱,
 7.  pkg/zlog是基于lumberjack日志库二次开发的日志库, 参考链接:https://github.com/natefinch/lumberjack
 
 8.  pkg/cache是用redis给db操作做了一个二级缓存, 和其它项目缓存的区别在于, 我们这个是当玩家在线的时候保证一些重要数据一直是热数据, 由于项目中的高频地图行为开发的缓存库
+
+9.  cmd/flatbuffers是在flatbuffers源码的基础上进行修改, 改变之后的使用接近protoc-gen-rpcx的效果(flatbuffer+grpc)
+
 # 自动化生成工具
 路径: https://github.com/mimis-s/zpudding/tools/auto_tool
 ```
