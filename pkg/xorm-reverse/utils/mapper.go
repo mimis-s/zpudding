@@ -1,9 +1,6 @@
 package utils
 
-import (
-	"xorm.io/xorm/names"
-	"xorm.io/xorm/schemas"
-)
+import "xorm.io/xorm/names"
 
 func GetMapperByName(mapname string) names.Mapper {
 	switch mapname {
@@ -14,14 +11,4 @@ func GetMapperByName(mapname string) names.Mapper {
 	default:
 		return names.SnakeMapper{}
 	}
-}
-
-func GetColumnName(tables *schemas.Table, name string) bool {
-	for _, c := range tables.ColumnsSeq() {
-		// fmt.Printf("col:%v\n", c)
-		if c == name {
-			return true
-		}
-	}
-	return false
 }

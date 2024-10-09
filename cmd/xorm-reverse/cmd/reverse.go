@@ -13,26 +13,20 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/mimis-s/zpudding/pkg/xorm-reverse/conf"
-	"github.com/mimis-s/zpudding/pkg/xorm-reverse/dialect"
-	"github.com/mimis-s/zpudding/pkg/xorm-reverse/language"
-	"github.com/mimis-s/zpudding/pkg/xorm-reverse/utils"
-	"xorm.io/xorm/dialects"
-
 	"gitea.com/lunny/log"
 	underscore "github.com/ahl5esoft/golang-underscore"
 	"github.com/gobwas/glob"
+	"github.com/mimis-s/zpudding/pkg/xorm-reverse/conf"
+	"github.com/mimis-s/zpudding/pkg/xorm-reverse/language"
+	"github.com/mimis-s/zpudding/pkg/xorm-reverse/utils"
 	"xorm.io/xorm"
 	"xorm.io/xorm/schemas"
 )
 
 var (
 	defaultFuncs = template.FuncMap{
-		"UnTitle":    utils.UnTitle,
-		"Upper":      utils.UpTitle,
-		"ColHasName": utils.GetColumnName,
-		"Lt":         utils.Lt,
-		"Gt":         utils.Gt,
+		"UnTitle": utils.UnTitle,
+		"Upper":   utils.UpTitle,
 	}
 )
 
@@ -99,8 +93,6 @@ func runReverse(source *conf.ReverseSource, target *conf.ReverseTarget) error {
 		source.ConnStr = dsn
 	}
 
-	dialects.RegisterDialect("mysql", func() dialects.Dialect { return &dialect.Mysql{} })
-
 	orm, err := xorm.NewEngine(source.Database, source.ConnStr)
 	if err != nil {
 		return err
@@ -154,11 +146,11 @@ func runReverse(source *conf.ReverseSource, target *conf.ReverseTarget) error {
 			importter = lang.GetImportter()
 		}
 
-		// target.ExtName = lang.GetExtName()
+		target.ExtName = lang.GetExtName()
 	}
-	// if !strings.HasPrefix(target.ExtName, ".") {
-	// 	target.ExtName = "." + target.ExtName
-	// }
+	if !strings.HasPrefix(target.ExtName, ".") {
+		target.ExtName = "." + target.ExtName
+	}
 
 	if bs == nil {
 		return errors.New("you have to indicate template / template path or a language")
@@ -188,7 +180,7 @@ func runReverse(source *conf.ReverseSource, target *conf.ReverseTarget) error {
 
 	var w *os.File
 	if !target.MultipleFiles {
-		w, err = os.Create(filepath.Join(target.OutputDir, target.FileName))
+		w, err = os.Create(filepath.Join(target.OutputDir, "models"+target.ExtName))
 		if err != nil {
 			return err
 		}
@@ -228,7 +220,7 @@ func runReverse(source *conf.ReverseSource, target *conf.ReverseTarget) error {
 			tbs := []*schemas.Table{table}
 			imports := importter(tbs)
 
-			w, err := os.Create(filepath.Join(target.OutputDir, table.Name+"."+target.FileName))
+			w, err := os.Create(filepath.Join(target.OutputDir, table.Name+target.ExtName))
 			if err != nil {
 				return err
 			}

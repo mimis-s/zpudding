@@ -1,9 +1,6 @@
 package utils
 
-import (
-	"html/template"
-	"strings"
-)
+import "strings"
 
 func UnTitle(src string) string {
 	if src == "" {
@@ -22,12 +19,4 @@ func UpTitle(src string) string {
 	}
 
 	return strings.ToUpper(src)
-}
-
-func Lt() template.HTML {
-	return "<"
-}
-
-func Gt() template.HTML {
-	return ">"
 }

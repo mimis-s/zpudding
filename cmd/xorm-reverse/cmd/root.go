@@ -43,8 +43,8 @@ var (
 
 func init() {
 	versionFlag = rootCmd.Flags().BoolP("version", "v", false, "version of the tool")
-	rootCmd.Flags().StringVarP(&reverseFile, "file", "f", "", "yml file to apply for reverse")
-	rootCmd.Flags().StringVarP(&dsn, "dsn", "d", "input dsn", "格式:dev:dev123@tcp(localhost:3306)/im-zhangbin?charset=utf8")
+	rootCmd.Flags().StringVarP(&reverseFile, "file", "f", "dbmodel/reverse/custom.yaml", "yml file to apply for reverse")
+	rootCmd.Flags().StringVarP(&dsn, "dsn", "d", "", "格式:dev:dev123@tcp(localhost:3306)/zhangbin_xorm?charset=utf8")
 }
 
 // Execute represnets execute command

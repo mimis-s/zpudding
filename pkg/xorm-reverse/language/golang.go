@@ -105,12 +105,6 @@ func (g *GoLanguage) BindTarget(target *conf.ReverseTarget) {
 }
 
 func (g *GoLanguage) TypeString(col *schemas.Column) string {
-	cstrs := strings.Split(col.Comment, "#")
-
-	if len(cstrs) == 3 {
-		return cstrs[1]
-	}
-
 	st := col.SQLType
 	t := schemas.SQLType2Type(st)
 	s := t.String()
@@ -152,33 +146,8 @@ func (g *GoLanguage) Tag(table *schemas.Table, col *schemas.Column) template.HTM
 		res = append(res, "deleted")
 	}*/
 
-	partitionTag := ""
-	if strings.HasPrefix(table.Comment, "PARTITION") {
-		strs := strings.Split(table.Comment, ":")
-		pf := strs[1]
-		pn := strs[2]
-		pm := strs[3]
-		if pf == col.Name {
-			partitionTag += fmt.Sprintf("%v|%v", pm, pn)
-		}
-	}
-
 	if /*supportComment &&*/ col.Comment != "" {
-		if partitionTag != "" {
-			if !strings.Contains(col.Comment, "PARTITION") {
-				res = append(res, fmt.Sprintf("comment('%s PARTITION:%v')", col.Comment, partitionTag))
-			} else {
-				res = append(res, fmt.Sprintf("comment('%s')", col.Comment))
-			}
-		} else {
-			res = append(res, fmt.Sprintf("comment('%s')", col.Comment))
-		}
-	} else {
-		if partitionTag != "" {
-			res = append(res, fmt.Sprintf("comment('PARTITION:%v')", partitionTag))
-		} else {
-			// res = append(res, fmt.Sprintf("comment('%s')", col.Comment))
-		}
+		res = append(res, fmt.Sprintf("comment('%s')", col.Comment))
 	}
 
 	names := make([]string, 0, len(col.Indexes))
@@ -208,7 +177,7 @@ func (g *GoLanguage) Tag(table *schemas.Table, col *schemas.Column) template.HTM
 		} else {
 			nstr += fmt.Sprintf("(%v)", col.Length)
 		}
-	} else if len(col.EnumOptions) > 0 { // enum
+	} else if len(col.EnumOptions) > 0 { //enum
 		nstr += "("
 		opts := ""
 
@@ -223,7 +192,7 @@ func (g *GoLanguage) Tag(table *schemas.Table, col *schemas.Column) template.HTM
 		}
 		nstr += strings.TrimLeft(opts, ",")
 		nstr += ")"
-	} else if len(col.SetOptions) > 0 { // enum
+	} else if len(col.SetOptions) > 0 { //enum
 		nstr += "("
 		opts := ""
 
@@ -239,7 +208,6 @@ func (g *GoLanguage) Tag(table *schemas.Table, col *schemas.Column) template.HTM
 		nstr += strings.TrimLeft(opts, ",")
 		nstr += ")"
 	}
-
 	res = append(res, nstr)
 	if len(res) > 0 {
 		if g.target.ColumnName {
