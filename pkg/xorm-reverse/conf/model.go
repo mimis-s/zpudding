@@ -76,5 +76,6 @@ type ReverseTarget struct {
 	Funcs     map[string]string `yaml:"funcs"`
 	Formatter string            `yaml:"formatter"`
 	Importter string            `yaml:"importter"`
-	ExtName   string            `yaml:"ext_name"`
+	FileName  string            `yaml:"file_name"`
+	// ExtName   string            `yaml:"ext_name"`
 }
