@@ -105,6 +105,13 @@ func (g *GoLanguage) BindTarget(target *conf.ReverseTarget) {
 }
 
 func (g *GoLanguage) TypeString(col *schemas.Column) string {
+
+	cstrs := strings.Split(col.Comment, "#")
+
+	if len(cstrs) == 3 {
+		return cstrs[1]
+	}
+
 	st := col.SQLType
 	t := schemas.SQLType2Type(st)
 	s := t.String()
