@@ -24,7 +24,7 @@ func initHandler() *HandleCacheInfo {
 	// 	fmt.Printf("命中率:%.2f\n", percent)
 	// }
 
-	dataSourceName := "root:dev123@tcp(192.168.1.22:3380)/sim_zhangbin?charset=utf8mb4"
+	dataSourceName := "root:dev123@tcp(localhost:3306)/sim_zhangbin?charset=utf8mb4"
 
 	engine, err := xorm.NewEngine("mysql", dataSourceName)
 	if err != nil {
