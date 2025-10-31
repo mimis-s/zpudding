@@ -12,130 +12,154 @@ import (
 	"xorm.io/xorm"
 )
 
-var itemID = 1
-
-func initHandler() *HandleCacheInfo {
-	conn := redis.NewClient(&redis.Options{
-		Addr:     "localhost:6379",
-		Password: "", // 没有密码，默认值
-		DB:       4,  // 默认DB 0
-	})
-	// back := func(percent float64) {
-	// 	fmt.Printf("命中率:%.2f\n", percent)
-	// }
-
-	dataSourceName := "root:dev123@tcp(localhost:3306)/sim_zhangbin?charset=utf8mb4"
-
-	engine, err := xorm.NewEngine("mysql", dataSourceName)
-	if err != nil {
-		panic(err)
-	}
-
-	getFunc := func(id int64, keys []interface{}) (interface{}, error) {
-		t := keys[0].(int)
-		fmt.Printf("tt:%v\n", t)
-		dbData := &BagItem{}
-		find, err := engine.Table("bag_item").Where(
-			"id = ?", id).Get(dbData)
-		if err != nil {
-			return "", fmt.Errorf("err: %v", err)
-		}
-		if !find {
-			return "", fmt.Errorf("not found")
-		}
-		return dbData, nil
-	}
-
-	updateFunc := func(id int64, keys []interface{}, data interface{}) error {
-		// dbData := data.(*BagItem)
-		t := keys[0].(int)
-		fmt.Printf("tt:%v\n", t)
-		_, err = engine.Table("bag_item").
-			Where("id = ?", id).Update(data)
-		if err != nil {
-			return fmt.Errorf("err:%v", err)
-		}
-		return nil
-	}
-	// ("testService", "1", conn, getFunc, updateFunc, time.Second*1, back)
-	handlerData := &HandleCacheInfo{
-		ServiceName: "testService",
-		CacheName:   "1",
-		Conn:        conn,
-		Encrypt: &JsonType{
-			Val: &BagItem{},
-		},
-		// Stats:      NewCacheStat(time.Second*1, back),
-		GetFunc:    getFunc,
-		UpdateFunc: updateFunc,
-	}
-	// RegisterCacheInfoHandler(1, handlerData)
-	return handlerData
+// 主键缓存sql
+type PrimaryKeySqlCache struct {
+	DBClient *SqlClient
 }
 
-var timesAdd int32 = 0
-var timesDel int32 = 0
+func (p *PrimaryKeySqlCache) CacheGet(rid string, tableName string, dbData interface{}, cacheCol string, keys ...interface{}) (interface{}, bool, error) {
+	session := p.DBClient.ReadEngine().Table(tableName).Where("rid = ?", rid)
+	// 如果没有特定的列, 则缓存整个表
+	if cacheCol != "" {
+		session.Cols(cacheCol)
+	}
+	find, err := session.Get(dbData)
+	return dbData, find, err
+}
+
+func (p *PrimaryKeySqlCache) CacheUpdate(rid string, tableName string, dbData interface{}, cacheCol string, keys ...interface{}) error {
+	session := p.DBClient.Table(tableName).Where("rid = ?", rid)
+	if cacheCol != "" {
+		session.Cols(cacheCol)
+	}
+	_, err := session.Update(dbData)
+	return err
+
+}
+
+func (p *PrimaryKeySqlCache) CacheInsert(rid string, tableName string, dbData interface{}) error {
+	aff, err := p.DBClient.Table(tableName).Insert(dbData)
+	if aff != 1 {
+		return fmt.Errorf("rid:%v cache:%v insert aff%v-1", rid, tableName, aff)
+	}
+	return err
+}
+
+
+
+type SqlClient struct {
+	*xorm.EngineGroup
+}
+
+func (d *SqlClient) ReadEngine() *xorm.Engine {
+	// 如果没有从库就用主库读
+	readEngines := d.Slaves()
+	if len(readEngines) == 0 {
+		return d.Engine
+	}
+	// 随机选取一个从库
+	return readEngines[rand.Intn(len(readEngines))]
+}
+
+func parseParams2Dsn(user, passwd, addr, db string) string {
+	return fmt.Sprintf("%s:%s@tcp(%s)/%s?parseTime=True&loc=Local", user, passwd, addr, db)
+}
+
+func newMysqlClent(mysqlConfig DBMSConfig) (*SqlClient, error) {
+	databaseDsns := make([]string, 0, len(mysqlConfig.Slaves)+1)
+	masterDsn := parseParams2Dsn(mysqlConfig.Master.User, mysqlConfig.Master.Passwd, mysqlConfig.Master.Addr, mysqlConfig.Master.DB)
+	databaseDsns = append(databaseDsns, masterDsn)
+	for _, slave := range mysqlConfig.Slaves {
+		slavesDsn := parseParams2Dsn(slave.User, slave.Passwd, slave.Addr, slave.DB)
+		databaseDsns = append(databaseDsns, slavesDsn)
+	}
+	engineGroup, err := xorm.NewEngineGroup("mysql", databaseDsns)
+	if err != nil {
+		return nil, err
+	}
+	engineGroup.SetMaxIdleConns(int(mysqlConfig.MaxIdleConn))
+	engineGroup.SetMaxOpenConns(int(mysqlConfig.MaxOpenConn))
+	engineGroup.AddHook(&MysqlHook{})
+	return &SqlClient{engineGroup}, nil
+}
+
+var dbMutex sync.Mutex
+var dbClientMap = make(map[string]*SqlClient)
+
+type DBConfig struct {
+	Addr   string `yaml:"addr"`
+	DB     string `yaml:"db"`     // 数据库
+	User   string `yaml:"user"`   // 数据库用户
+	Passwd string `yaml:"passwd"` // 数据库密码
+}
+
+type DBMSConfig struct {
+	Tag         string      `yaml:"tag"`    // 用来分库
+	Master      DBConfig    `yaml:"master"` // 主库
+	Slaves      []*DBConfig `yaml:"slaves"` // 从库
+	MaxOpenConn int         `yaml:"max_open_conn"`
+	MaxIdleConn int         `yaml:"max_idle_conn"`
+}
+
+func getOperationType(sql string) string {
+	if len(sql) < 6 {
+		return "OTHER"
+	}
+	return strings.ToUpper(sql[:6])
+}
+
+// mysql的读写钩子
+type MysqlHook struct {
+}
+
+func (h *MysqlHook) BeforeProcess(c *contexts.ContextHook) (context.Context, error) {
+	return c.Ctx, nil
+}
+
+func (h *MysqlHook) AfterProcess(c *contexts.ContextHook) error {
+	// 获取操作类型 (SELECT, INSERT, UPDATE, DELETE)
+	opType := getOperationType(c.SQL)
+	fmt.Printf("[xorm]:%v use time:%vms - sql: %v args[%v]\n", opType, c.ExecuteTime.Milliseconds(), c.SQL, c.Args)
+	return nil
+}
+
+func NewSqlClent(mysqlConfigs []DBMSConfig, tag string) (*SqlClient, error) {
+	// 初始化数据库xorm
+	dbMutex.Lock()
+	defer dbMutex.Unlock()
+
+	if dbClientMap[tag] != nil {
+		return dbClientMap[tag], nil
+	}
+
+	for _, mysqlConfig := range mysqlConfigs {
+		if mysqlConfig.Tag == tag {
+			client, err := newMysqlClent(mysqlConfig)
+			if err != nil {
+				return nil, err
+			}
+			dbClientMap[tag] = client
+			return client, nil
+		}
+	}
+	strJson, _ := json.Marshal(mysqlConfigs)
+	errStr := fmt.Sprintf("mysql tag:%v url[%v] db New Engine is not found", tag, string(strJson))
+	return nil, fmt.Errorf(errStr)
+}
 
 func TestIntCache(t *testing.T) {
-	handlerData := initHandler()
-
-	wg := sync.WaitGroup{}
-	wg.Add(20)
-	i := 0
-	for {
-		go func() {
-			for j := 0; j < 1000; j++ {
-				strData, err := handlerData.Update(int64(itemID), func(data interface{}) (interface{}, error) {
-					itemNum := data.(*BagItem)
-					itemNum.ItemNum += 10
-					return itemNum, nil
-				}, 29)
-				if err != nil {
-					panic(err)
-				}
-				atomic.AddInt32(&timesAdd, 1)
-
-				itemNum := strData.(*BagItem)
-				fmt.Printf("增加:%v %v\n", timesAdd, itemNum.ItemNum)
-			}
-			wg.Done()
-		}()
-		i++
-		if i == 10 {
-			break
-		}
-	}
-
-	i = 0
-	for {
-		go func() {
-			for j := 0; j < 1000; j++ {
-				strData, err := handlerData.Update(int64(itemID), func(data interface{}) (interface{}, error) {
-					itemNum := data.(*BagItem)
-					itemNum.ItemNum -= 10
-					return itemNum, nil
-				}, 29)
-				if err != nil {
-					panic(err)
-				}
-				atomic.AddInt32(&timesDel, 1)
-
-				itemNum := strData.(*BagItem)
-				fmt.Printf("减少:%v %v\n", timesDel, itemNum.ItemNum)
-			}
-			wg.Done()
-		}()
-		i++
-		if i == 10 {
-			break
-		}
-	}
-
-	wg.Wait()
-
-	err := handlerData.LogoutCache(int64(itemID), 29)
-	if err != nil {
-		panic(err)
-	}
-	fmt.Printf("数据:%v %v\n", timesAdd, timesDel)
+	// 下面是示例, 实际代码会不同
+	hanlder := NewHandleCache(CacheConfig{
+		TableName:   (&dbmodel.RoleT{}).SubName(),
+		ColName:     dbmodel.TRole.Base,
+		Conn:        redisClient.Client,
+		CacheLock:   false,
+		Stats:       xcache.NewCacheStat(time.Second*2, func(hit, miss uint64) { redisClient.CacheHitRate(dbmodel.TRole.Base, hit, miss) }),
+		Encrypt:     &xcache.JsonType{Val: &db_extra.RoleItemT{}},
+		TableStruct: dbmodel.RoleT{},
+		Manger:      &xclient.PrimaryKeySqlCache{DBClient: db},
+	})
+	hanlder.Get()
+	hanlder.Update()
+	hanlder.Insert()
 }
