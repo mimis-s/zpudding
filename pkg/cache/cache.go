@@ -1,52 +1,58 @@
-package cache
+package xcache
 
 import (
-	"fmt"
+	"reflect"
 
-	"sync"
+	"github.com/go-redis/redis/v8"
 )
 
 /*
-	并发问题:
-	1: 在load数据还没有读取到redis中的时候, 这个时候外部数据更新了, 要update
-	1解决: 所有操作都应该给这条redis记录加一个乐观锁, update的时候发现这条记录已经被load锁住了, 就会等待load结束之后再操作
+并发问题:
+1: 在load数据还没有读取到redis中的时候, 这个时候外部数据更新了, 要update
+1解决: 所有操作都应该给这条redis记录加一个乐观锁, update的时候发现这条记录已经被load锁住了, 就会等待load结束之后再操作
 */
+type UpdateFuncHandle func(rid string, data interface{}, keys ...interface{}) error
 
-type UpdateFuncHandle func(id int64, keys []interface{}, data interface{}) error
-
-type GetFuncHanel func(id int64, keys []interface{}) (interface{}, error)
+type GetFuncHanel func(rid string, keys ...interface{}) (interface{}, bool, error)
 
 type CacheInfo interface {
-
-	/*
-		这里LoadToCache的data使用可变参数是因为本来有GetFuncHanel函数,
-		不传data也可以直接从get函数获取, 但是get函数可能是mysql操作,
-		而一般load的时候mysql数据已经读取出来了,
-		所以为了减少一次数据库操作可以传入一个参数值
-	*/
-	LoadToCache(id int64, data interface{}, keys ...interface{}) (interface{}, error)                                  // 将信息读入到缓存
-	LogoutCache(id int64, keys ...interface{}) error                                                                   // 将缓存数据读入数据库, 删除缓存
-	Get(id int64, keys ...interface{}) (interface{}, error)                                                            // 获取cache数据
-	Update(id int64, updateData func(data interface{}) (interface{}, error), keys ...interface{}) (interface{}, error) // 更新cache数据
-
+	// CacheBackSave(rid string, keys ...interface{}) error                                                                 // 将缓存数据读入数据库, 删除缓存
+	Get(rid string, keys ...interface{}) (interface{}, bool, error)                                                      // 获取cache数据
+	Update(rid string, updateData func(data interface{}) (interface{}, error), keys ...interface{}) (interface{}, error) // 更新cache数据
+	Insert(rid string, data interface{}, keys ...interface{}) error                                                      // 插入cache数据
 }
 
-var mapCache sync.Map
-
-// 每个数据对应一个typeid, 只要不重复就可以
-
-func RegisterCacheInfoHandler(cType int, datas ...CacheInfo) {
-	for _, data := range datas {
-		mapCache.Store(cType, data)
-	}
+type CacheConfig struct {
+	TableName   string // key的前缀
+	ColName     string // 缓存数据的名字
+	Conn        *redis.Client
+	CacheLock   bool        // 操作缓存的时候加分布式锁
+	Stats       *CacheStat  // 缓存命中率统计
+	Encrypt     Serialize   // 编解码方式(如果客户端不传则为string)
+	Lifetime    int         // 缓存存活时间(s)
+	TableStruct interface{} // 要缓存的表
+	Manger      CacheManger
 }
 
-func GetCacheInfoHandler(cType int) CacheInfo {
-	var data interface{}
-	var ok bool
-	if data, ok = mapCache.Load(cType); !ok {
-		errInfo := fmt.Errorf("not found type[%v] cache, please register", cType)
-		panic(errInfo)
+func NewHandleCache(cacheConfig CacheConfig) CacheInfo {
+	if cacheConfig.Manger == nil {
+		return nil
 	}
-	return data.(CacheInfo)
+	if cacheConfig.Lifetime <= 0 {
+		// 默认存活60s
+		cacheConfig.Lifetime = 60
+	}
+	return &HandleCacheInfo{
+		tableName: cacheConfig.TableName,
+		colName:   cacheConfig.ColName,
+		tableType: reflect.TypeOf(cacheConfig.TableStruct),
+		manger:    cacheConfig.Manger,
+		cache: &cacheBase{
+			Conn:      cacheConfig.Conn,
+			CacheLock: cacheConfig.CacheLock,
+			Stats:     cacheConfig.Stats,
+			Encrypt:   cacheConfig.Encrypt,
+			Lifetime:  cacheConfig.Lifetime,
+		},
+	}
 }
