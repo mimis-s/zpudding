@@ -1,4 +1,4 @@
-package xcache
+package cache
 
 import (
 	"reflect"
