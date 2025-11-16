@@ -10,10 +10,10 @@ type CacheStat struct {
 	hitNum       uint64
 	missNum      uint64
 	statInterval time.Duration
-	sizeCallback func(float64)
+	sizeCallback func(hit uint64, miss uint64)
 }
 
-func NewCacheStat(statInterval time.Duration, sizeCallback func(float64)) *CacheStat {
+func NewCacheStat(statInterval time.Duration, sizeCallback func(hit uint64, miss uint64)) *CacheStat {
 	st := &CacheStat{
 		statInterval: statInterval,
 		sizeCallback: sizeCallback,
@@ -29,12 +29,7 @@ func (c *CacheStat) statLoop() {
 	for range ticker.C {
 		hit := atomic.SwapUint64(&c.hitNum, 0)
 		miss := atomic.SwapUint64(&c.missNum, 0)
-		total := hit + miss
-		if total == 0 {
-			continue
-		}
-		percent := 100.0 * float64(hit) / float64(total)
-		c.sizeCallback(percent)
+		c.sizeCallback(hit, miss)
 	}
 }
 

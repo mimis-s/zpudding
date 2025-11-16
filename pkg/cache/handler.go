@@ -4,26 +4,27 @@ import (
 	"fmt"
 	"reflect"
 	"strconv"
-
-	"github.com/go-redis/redis/v8"
+	"strings"
 )
 
-var (
-	prefixCache = "cache.data.int."
-)
+var retryGet = 3 // 当插入失败之后再重新读取的次数(一行数据的多列会被缓存, 防止并发insert失败)
+
+// dbData都是表结构
+type CacheManger interface {
+	CacheGet(rid string, tableName string, dbData interface{}, cacheCol string, keys ...interface{}) (interface{}, bool, error)
+	CacheUpdate(rid string, tableName string, dbData interface{}, cacheCol string, keys ...interface{}) error
+	CacheInsert(rid string, tableName string, dbData interface{}) error
+}
 
 type HandleCacheInfo struct {
-	ServiceName string // 服务名字
-	CacheName   string // 缓存数据的名字
-	Conn        *redis.Client
-	Stats       *CacheStat       // 缓存命中率统计
-	Encrypt     Serialize        // 编解码方式(如果客户端不传则为string)
-	GetFunc     GetFuncHanel     // db的读写函数
-	UpdateFunc  UpdateFuncHandle // db的读写函数
+	tableName string       // 数据表的名字(key的前缀)
+	colName   string       // 数据列的名字(缓存数据的名字)
+	tableType reflect.Type // 要缓存的表
+	cache     *cacheBase
+	manger    CacheManger // 数据库读写管理
 }
 
 func judgeKeyType(key interface{}) (string, error) {
-
 	switch key.(type) {
 	case int:
 		return strconv.Itoa(key.(int)), nil
@@ -38,125 +39,149 @@ func judgeKeyType(key interface{}) (string, error) {
 	}
 }
 
-func (s *HandleCacheInfo) LoadToCache(id int64, datas interface{}, keys ...interface{}) (interface{}, error) {
-
-	strID := strconv.FormatInt(id, 10)
-	for _, key := range keys {
-		strKey, err := judgeKeyType(key)
-		if err != nil {
-			return nil, err
-		}
-		strID += "." + strKey
+func (s *HandleCacheInfo) get(rid string, keys ...interface{}) (interface{}, bool, error) {
+	colName := ""
+	if s.colName != s.tableName {
+		colName = s.colName
 	}
-
-	prefixCacheForID := prefixCache + s.ServiceName + "." + s.CacheName
-	if s.GetFunc == nil || s.UpdateFunc == nil {
-		return nil, fmt.Errorf("try get id(%v) data cache[%v] db func is nil", strID, prefixCacheForID)
-	}
-	reData, err := LockGetOrInsertCache(s, prefixCacheForID, strID, func() (interface{}, error) {
-		var dataCache interface{}
-		var err error
-		if datas != "" {
-			dataCache = datas
-		} else {
-			dataCache, err = s.GetFunc(id, keys)
-			if err != nil {
-				return "", fmt.Errorf("try get id(%v) data cache[%v] is err:%v", strID, prefixCacheForID, err)
-			}
-		}
-		return dataCache, nil
-	})
-
+	dataValue := reflect.New(s.tableType).Interface()
+	dataCache, bFind, err := s.manger.CacheGet(rid, s.tableName, dataValue, colName, keys...)
 	if err != nil {
-		return "", fmt.Errorf("try set id(%v) data cache[%v] is err:%v", strID, prefixCacheForID, err)
+		return dataCache, bFind, fmt.Errorf("try get id(%v) data cache[%v] is err:%v", s.tableName, colName, err)
 	}
-	return reData, nil
+	if colName == "" {
+		return dataCache, bFind, nil
+	}
+	if !bFind {
+		return nil, false, nil
+	}
+	typeData := reflect.TypeOf(dataCache).Elem()
+	valueData := reflect.ValueOf(dataCache).Elem()
+	for i := 0; i < typeData.NumField(); i++ {
+		field := typeData.Field(i)
+		xormTags := strings.Split(field.Tag.Get("xcache"), " ")
+		if len(xormTags) > 0 && xormTags[0] == colName {
+			return valueData.Field(i).Interface(), bFind, nil
+		}
+	}
+	return dataCache, bFind, fmt.Errorf("try get id(%v) data cache col:%v is not found", s.tableName, colName)
 }
 
-func (s *HandleCacheInfo) LogoutCache(id int64, keys ...interface{}) error {
-
-	strID := strconv.FormatInt(id, 10)
-	for _, key := range keys {
-		strKey, err := judgeKeyType(key)
-		if err != nil {
-			return err
-		}
-		strID += "." + strKey
+func (s *HandleCacheInfo) update(rid string, colData interface{}, keys ...interface{}) error {
+	colName := ""
+	if s.colName != s.tableName {
+		colName = s.colName
 	}
-
-	prefixCacheForID := prefixCache + s.ServiceName + "." + s.CacheName
-	if s.GetFunc == nil || s.UpdateFunc == nil {
-		return fmt.Errorf("try get id(%v) data cache[%v] db func is nil", strID, prefixCacheForID)
-	}
-
-	LockDelCache(s, prefixCacheForID, strID, func(data interface{}) error {
-		err := s.UpdateFunc(id, keys, data)
-		if err != nil {
-			return fmt.Errorf("try get and update id(%v) data[%v] cache[%v] is err:%v", strID, data, prefixCacheForID, err)
+	dataValue := reflect.New(s.tableType).Interface()
+	if colName != "" {
+		typeData := reflect.TypeOf(dataValue).Elem()
+		valueData := reflect.ValueOf(dataValue).Elem()
+		bFindCol := false
+		for i := 0; i < typeData.NumField(); i++ {
+			field := typeData.Field(i)
+			xormTags := strings.Split(field.Tag.Get("xcache"), " ")
+			if len(xormTags) > 0 && xormTags[0] == colName {
+				if valueData.Field(i).IsValid() && valueData.Field(i).CanSet() {
+					valueData.Field(i).Set(reflect.ValueOf(colData))
+					bFindCol = true
+					break
+				}
+			}
 		}
-		return nil
-	})
-
+		if !bFindCol {
+			return fmt.Errorf("try get id(%v) data cache col:%v is not found", s.tableName, colName)
+		}
+	}
+	err := s.manger.CacheUpdate(rid, s.tableName, dataValue, colName, keys...)
+	if err != nil {
+		return fmt.Errorf("try get and update id(%v) data[%v] cache[%v] to db is err:%v", s.tableName, colData, colName, err)
+	}
 	return nil
 }
 
-func (s *HandleCacheInfo) Get(id int64, keys ...interface{}) (interface{}, error) {
-
-	strID := strconv.FormatInt(id, 10)
-	for _, key := range keys {
-		strKey, err := judgeKeyType(key)
-		if err != nil {
-			return nil, err
-		}
-		strID += "." + strKey
+func (s *HandleCacheInfo) insert(rid string, dbData interface{}, keys ...interface{}) (interface{}, error) {
+	colName := ""
+	if s.colName != s.tableName {
+		colName = s.colName
+	}
+	err := s.manger.CacheInsert(rid, s.tableName, dbData)
+	if err != nil {
+		return nil, fmt.Errorf("try get and insert id(%v) data[%v] cache to db is err:%v", s.tableName, dbData, err)
 	}
 
-	prefixCacheForID := prefixCache + s.ServiceName + "." + s.CacheName
-	if s.GetFunc == nil || s.UpdateFunc == nil {
-		return nil, fmt.Errorf("try get id(%v) data cache[%v] db func is nil", strID, prefixCacheForID)
+	if colName != "" {
+		typeData := reflect.TypeOf(dbData).Elem()
+		valueData := reflect.ValueOf(dbData).Elem()
+		for i := 0; i < typeData.NumField(); i++ {
+			field := typeData.Field(i)
+			xormTags := strings.Split(field.Tag.Get("xcache"), " ")
+			if len(xormTags) > 0 && xormTags[0] == colName {
+				return valueData.Field(i).Interface(), nil
+			}
+		}
 	}
 
-	data, err := LockGetOrInsertCache(s, prefixCacheForID, strID, func() (interface{}, error) {
-		dataCache, err := s.GetFunc(id, keys)
-		if err != nil {
-			return "", fmt.Errorf("try get id(%v) data cache[%v] is err:%v", strID, prefixCacheForID, err)
-		}
-		return dataCache, nil
+	return dbData, nil
+}
+
+func (s *HandleCacheInfo) Get(rid string, keys ...interface{}) (interface{}, bool, error) {
+
+	prefixCacheForID := s.tableName + "." + rid
+	if s.manger == nil {
+		return nil, false, fmt.Errorf("try get id(%v) data cache[%v] db func is nil", prefixCacheForID, s.colName)
+	}
+
+	data, find, err := s.cache.GetCache(prefixCacheForID, s.colName, func() (interface{}, bool, error) {
+		return s.get(rid, keys...)
 	})
 
 	if err != nil {
-		return "", fmt.Errorf("try get and insert id(%v) data cache[%v] is err:%v", strID, prefixCacheForID, err)
+		return nil, false, fmt.Errorf("try get id(%v) data cache[%v] is err:%v", prefixCacheForID, s.colName, err)
 	}
 
-	return data, nil
+	return data, find, nil
 }
 
-func (s *HandleCacheInfo) Update(id int64, updateData func(data interface{}) (interface{}, error), keys ...interface{}) (interface{}, error) {
+func (s *HandleCacheInfo) Update(rid string, updateData func(data interface{}) (interface{}, error), keys ...interface{}) (interface{}, error) {
 
-	strID := strconv.FormatInt(id, 10)
-	for _, key := range keys {
-		strKey, err := judgeKeyType(key)
-		if err != nil {
-			return nil, err
-		}
-		strID += "." + strKey
-	}
-
-	prefixCacheForID := prefixCache + s.ServiceName + "." + s.CacheName
-	if s.GetFunc == nil || s.UpdateFunc == nil {
-		return nil, fmt.Errorf("try get id(%v) data cache[%v] db func is nil", strID, prefixCacheForID)
+	prefixCacheForID := s.tableName + "." + rid
+	if s.manger == nil {
+		return nil, fmt.Errorf("try update id(%v) data cache[%v] db func is nil", prefixCacheForID, s.colName)
 	}
 
 	updateFunc := func(data interface{}) (interface{}, error) {
-		return updateData(data)
+		newData, err := updateData(data)
+		if err != nil {
+			return newData, err
+		}
+		if err := s.update(rid, newData, keys...); err != nil {
+			return nil, err
+		}
+		return newData, nil
 	}
 
-	insertFunc := func() (interface{}, error) {
-		dataCache, err := s.GetFunc(id, keys)
+	getFunc := func() (interface{}, error) {
+		dataCache, find, err := s.get(rid, keys...)
 		if err != nil {
-			return "", fmt.Errorf("try get id(%v) data cache[%v] is err:%v", strID, prefixCacheForID, err)
+			return "", fmt.Errorf("try update id(%v) data cache[%v] is err:%v", prefixCacheForID, s.colName, err)
+		}
+		if !find {
+			return "", fmt.Errorf("try update id(%v) data cache[%v] is not found", prefixCacheForID, s.colName)
 		}
 		return dataCache, nil
 	}
-	return LockUpdateOrInsertCache(s, prefixCacheForID, strID, updateFunc, insertFunc)
+	return s.cache.UpdateCache(prefixCacheForID, s.colName, updateFunc, getFunc)
+}
+
+func (s *HandleCacheInfo) Insert(rid string, data interface{}, keys ...interface{}) error {
+	prefixCacheForID := s.tableName + "." + rid
+	if s.manger == nil {
+		return fmt.Errorf("try insert id(%v) data cache[%v] db func is nil", prefixCacheForID, s.colName)
+	}
+	colData, err := s.insert(rid, data, keys...)
+	if err != nil {
+		return err
+	}
+
+	return s.cache.InsertCache(prefixCacheForID, s.colName, colData)
 }
