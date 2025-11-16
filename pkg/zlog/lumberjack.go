@@ -39,7 +39,6 @@ import (
 	"sort"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 )
 
@@ -57,7 +56,10 @@ func chown(name string, info os.FileInfo) error {
 		return err
 	}
 	f.Close()
-	stat := info.Sys().(*syscall.Stat_t)
+	stat, err := getStats(info)
+	if err != nil {
+		return err
+	}
 	return osChown(name, int(stat.Uid), int(stat.Gid))
 }
 
